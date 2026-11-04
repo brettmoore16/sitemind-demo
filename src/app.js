@@ -1,69 +1,95 @@
-import { initialState, validState, summary, STORAGE_KEY } from './state.js';
+import { initialState, migrateState, summary, STORAGE_KEY, uid, collections, statuses, dateLabel, localDate, followUps, priorities, isDuplicate, addItem, setStatus } from './state.js';
+import { analyzeNote } from './parser.js';
 const $ = selector => document.querySelector(selector);
-const escape = text => String(text).replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
-let state = initialState();
-let storageAvailable = true;
-let recovery = false;
-try {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) { const parsed = JSON.parse(saved); if (validState(parsed)) state = parsed; else recovery = true; }
-} catch { storageAvailable = false; }
-let filter = 'all';
-let brief = 'morning';
-let entryMode = 'task';
-let toastTimer;
-function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('visible'); clearTimeout(toastTimer); toastTimer = setTimeout(()=>$('#toast').classList.remove('visible'),3500); }
-function save(message) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); storageAvailable = true; }
-  catch { storageAvailable = false; }
-  render();
-  if (message) toast(storageAvailable ? message : 'Change kept for this session. Browser storage is unavailable.');
+const escape = text => String(text ?? '').replace(/[&<>"']/g, character => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
+const names={tasks:'Task',commitments:'Commitment',events:'Schedule event',reminders:'Reminder'};
+let state=initialState(), storageAvailable=true, recovery=false;
+try { const saved=localStorage.getItem(STORAGE_KEY); if(saved) {try {state=migrateState(JSON.parse(saved));} catch {recovery=true;} } } catch {storageAvailable=false;}
+let filter='all', brief='morning', toastTimer, proposals=[], originalNote='', referenceDate, editing=null;
+function toast(message){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),5000);}
+function save(message){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(state));storageAvailable=true;}catch{storageAvailable=false;}render();if(message)toast(storageAvailable?message:'Change kept for this session. Browser storage is unavailable.');}
+const due=item=>[item.dueDate?dateLabel(item.dueDate):item.time || 'No date set',item.dueTime].filter(Boolean).join(' · ');
+const badge=item=>`<span class="status-badge status-${item.status}">${escape(item.status)}</span>`;
+const actions=(collection,item)=>`<div class="item-actions"><button type="button" data-edit="${escape(item.id)}" data-collection="${collection}" aria-label="Edit ${escape(item.title)}">Edit</button><button type="button" data-delete="${escape(item.id)}" data-collection="${collection}" aria-label="Delete ${escape(item.title)}">Delete</button></div>`;
+function source(item){if(!item.sourceNoteId)return '';const note=state.activities.find(a=>a.id===item.sourceNoteId);return note?`<details class="source-note"><summary>Original field note</summary><p>${escape(note.text)}</p></details>`:'';}
+function taskRow(item,collection='tasks',prefix='task'){
+ return `<div class="task-row ${item.status==='completed'?'done':''}"><input type="checkbox" id="${prefix}-${escape(item.id)}" data-check="${escape(item.id)}" data-collection="${collection}" ${item.status==='completed'?'checked':''} aria-label="${escape(item.title)}"><div class="task-body"><label class="task-title" for="${prefix}-${escape(item.id)}">${escape(item.title)}</label><div class="task-detail">${escape(item.detail)}${item.contractor?' · '+escape(item.contractor):''}</div><div class="item-meta">${badge(item)}<span>${escape(due(item))}</span>${item.priority==='high'?'<span class="priority">HIGH</span>':''}<span>${collection==='reminders' || item.kind==='followup'?'Follow-up':'Physical work'}</span></div>${actions(collection,item)}${source(item)}</div></div>`;
 }
-function render() {
-  const s = summary(state);
-  $('#tasks-stat').innerHTML = `${s.open} <small>/ ${s.total}</small>`;
-  $('#task-progress-text').textContent = `${s.done} completed`;
-  $('#task-progress').style.width = `${s.total ? s.done / s.total * 100 : 0}%`;
-  $('#task-count').textContent = s.total;
-  $('#nav-task-count').textContent = s.open;
-  $('#completion-label').textContent = `${s.done} of ${s.total} done`;
-  $('#commitment-stat').innerHTML = `${state.commitments.length} <small>due today</small>`;
-  $('#commitment-progress-text').textContent = `${s.confirmed} confirmed`;
-  $('#risk-stat').innerHTML = `${s.risks} <small>${s.risks ? 'need attention' : 'all clear'}</small>`;
-  $('.risk-stat p').innerHTML = `<span class="amber">${s.highRisks} high priority</span> · ${s.risks ? 'stay ahead of it' : 'good work'}`;
-  $('#risk-count').textContent = s.risks;
-  const tasks = state.tasks.filter(t => filter === 'all' || (filter === 'done' ? t.done : !t.done));
-  $('#task-list').innerHTML = tasks.map(t=>`<div class="task-row ${t.done?'done':''}"><input type="checkbox" id="${escape(t.id)}" data-task="${escape(t.id)}" ${t.done?'checked':''} aria-label="${escape(t.title)}"><div class="task-body"><label class="task-title" for="${escape(t.id)}">${escape(t.title)}</label><div class="task-detail">${escape(t.detail)}</div></div>${t.priority==='high' && !t.done?'<span class="priority">HIGH</span>':`<span class="task-time">${escape(t.time)}</span>`}</div>`).join('') || '<div class="empty-state">No tasks here. A little breathing room.</div>';
-  $('#commitment-list').innerHTML = state.commitments.map(c=>`<div class="contractor"><span class="contractor-avatar">${escape(c.initials)}</span><div class="contractor-content"><h3>${escape(c.name)}</h3><p>${escape(c.text)}</p><small>${escape(c.contact)}</small></div><button class="commitment-button ${c.confirmed?'confirmed':''}" data-commitment="${c.id}" aria-pressed="${c.confirmed}" aria-label="${c.confirmed?'Unconfirm':'Confirm'} ${escape(c.name)} commitment">${c.confirmed?'✓ Confirmed':'Confirm ↗'}</button></div>`).join('');
-  $('#risk-list').innerHTML = state.risks.map(r=>`<div class="risk-item ${r.resolved?'resolved':''}"><div class="risk-top"><h3>${escape(r.title)}</h3><span class="risk-level">${r.resolved?'RESOLVED':escape(r.level)}</span></div><p>${escape(r.text)}</p><button class="risk-action" data-risk="${r.id}">${r.resolved?'Reopen risk ↗':'Mark resolved ↗'}</button></div>`).join('');
-  $('#activity-list').innerHTML = state.activities.map(a=>`<div class="activity"><span class="avatar">${escape(a.initials)}</span><div><p><strong>${escape(a.author)}</strong><br>${escape(a.text)}</p><time>${escape(a.time)}</time></div></div>`).join('');
-  $('#storage-status').textContent = storageAvailable ? 'Saved in this browser' : 'Session only · browser storage unavailable';
-  renderBrief();
+function render(){
+ const s=summary(state);
+ $('#workspace-date').textContent=`${new Date().toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric',year:'numeric'}).toUpperCase()} · FICTIONAL PROJECT`;
+ $('#tasks-stat').innerHTML=`${s.open} <small>/ ${s.total}</small>`;$('#task-progress-text').textContent=`${s.done} completed`;$('#task-progress').style.width=`${s.total?s.done/s.total*100:0}%`;$('#task-count').textContent=s.total;$('#nav-task-count').textContent=s.open;$('#completion-label').textContent=`${s.done} of ${s.total} done`;
+ const outstanding=state.commitments.filter(i=>i.status!=='completed');
+ $('#commitment-stat').innerHTML=`${outstanding.length} <small>outstanding</small>`;$('#commitment-progress-text').textContent=`${s.confirmed} confirmed`;$('#commitment-extra').textContent=` · ${state.commitments.filter(i=>i.status==='completed').length} completed`;
+ const events=[...state.events].sort((a,b)=>(a.dueDate || '9999').localeCompare(b.dueDate || '9999') || a.dueTime.localeCompare(b.dueTime));
+ const openEvents=events.filter(i=>i.status!=='completed');
+ $('#event-stat').innerHTML=`${openEvents.length} <small>open events</small>`;
+ const next=openEvents.find(i=>i.dueDate>=localDate()) || openEvents[0];$('#next-event-label').textContent=next?`Next open: ${next.title} · ${due(next)}`:'No open events';
+ $('#risk-stat').innerHTML=`${s.risks} <small>${s.risks?'need attention':'all clear'}</small>`;$('.risk-stat p').innerHTML=`<span class="amber">${s.highRisks} high priority</span> · ${s.risks?'stay ahead of it':'good work'}`;$('#risk-count').textContent=s.risks;
+ $('#task-list').innerHTML=state.tasks.filter(t=>filter==='all' || (filter==='done'?t.status==='completed':t.status!=='completed')).map(t=>taskRow(t)).join('') || '<div class="empty-state">No tasks here. A little breathing room.</div>';
+ const follows=followUps(state);$('#followup-count').textContent=follows.length;$('#followup-list').innerHTML=follows.map(i=>taskRow(i,i.collection,'follow')).join('') || '<div class="empty-state">No open follow-ups.</div>';
+ $('#reminder-list').innerHTML=state.reminders.map(i=>taskRow(i,'reminders','reminder')).join('') || '<div class="empty-state">Add a reminder or include “remind me” in a field note.</div>';
+ $('#priority-list').innerHTML=priorities(state).map((i,index)=>`<a class="priority-card" href="#${i.collection==='events'?'schedule':i.collection}"><span class="priority-rank">0${index+1}</span><div><strong>${escape(i.title)}</strong><p>${names[i.collection]} · ${escape(due(i))}</p>${badge(i)}</div></a>`).join('') || '<div class="empty-state">Everything is complete. Your priorities are clear.</div>';
+ $('#commitment-list').innerHTML=state.commitments.map(c=>`<div class="contractor"><span class="contractor-avatar">${escape((c.contractor || 'Trade').split(' ').map(w=>w[0]).join('').slice(0,2))}</span><div class="contractor-content"><h3>${escape(c.contractor || 'Contractor not set')}</h3><p>${escape(c.title)}</p><small>${escape(c.detail)} · ${escape(due(c))}</small><div class="item-meta">${badge(c)}</div>${actions('commitments',c)}${source(c)}</div><button class="commitment-button ${c.status==='confirmed'?'confirmed':''}" data-confirm="${escape(c.id)}" aria-pressed="${c.status==='confirmed'}" ${c.status==='completed'?'disabled':''}>${c.status==='completed'?'Completed':c.status==='confirmed'?'✓ Confirmed':'Confirm ↗'}</button></div>`).join('') || '<div class="empty-state">No contractor commitments.</div>';
+ $('#event-list').innerHTML=events.map(e=>`<div class="schedule-item"><div class="event-time">${escape(due(e))}</div><strong>${escape(e.title)}</strong><p>${escape(e.detail)}${e.contractor?' · '+escape(e.contractor):''}</p><div class="item-meta">${badge(e)}</div>${actions('events',e)}${source(e)}</div>`).join('') || '<div class="empty-state">No schedule events.</div>';
+ $('#risk-list').innerHTML=state.risks.map(r=>`<div class="risk-item ${r.resolved?'resolved':''}"><div class="risk-top"><h3>${escape(r.title)}</h3><span class="risk-level">${r.resolved?'RESOLVED':escape(r.level)}</span></div><p>${escape(r.text)}</p><button class="risk-action" data-risk="${r.id}">${r.resolved?'Reopen risk ↗':'Mark resolved ↗'}</button></div>`).join('');
+ $('#activity-list').innerHTML=state.activities.map(a=>`<div class="activity"><span class="avatar">${escape(a.initials)}</span><div><p><strong>${escape(a.author)}</strong><br>${escape(a.text)}</p><time>${escape(a.time)}</time>${a.referenceDate?`<time>Dates interpreted relative to ${escape(a.referenceDate)}</time>`:''}</div></div>`).join('');
+ $('#storage-status').textContent=storageAvailable?'Saved in this browser':'Session only · browser storage unavailable';renderBrief();
 }
-function renderBrief() {
-  const s = summary(state);
-  const morning = brief === 'morning';
-  $('#brief-title').textContent = morning ? 'Start strong. Stay ahead.' : 'Close the day with clarity.';
-  $('#brief-intro').textContent = morning ? 'Here’s your field picture for Riverside Commons. A few things to keep on your radar:' : `You’ve closed ${s.done} of ${s.total} tasks. Here’s what to carry into tomorrow’s huddle:`;
-  const points = morning ? [s.open ? `${s.open} tasks to close today. Start with ${state.tasks.find(t=>!t.done && t.priority==='high')?.title.toLowerCase() || 'your next open item'}.` : 'All tasks are complete. Take a moment to review tomorrow’s work.', `${state.commitments.length-s.confirmed} contractor commitments still need confirmation.`, s.risks ? `${s.risks} open risks to watch. Review the watch list before the crew gets moving.` : 'Your watch list is clear. Keep an eye on changing site conditions.'] : [s.open ? `${s.open} tasks remain open. Review them before handing off to the next shift.` : 'Today’s checklist is complete. Nice work keeping the site moving.', `${s.confirmed} of ${state.commitments.length} contractor commitments confirmed. Verify completion with each trade.`, 'Tomorrow: Zone B concrete pour at 7:00 AM. Recheck the forecast and crew readiness.'];
-  $('#brief-points').innerHTML = points.map(p=>`<li>${escape(p)}</li>`).join('');
-  $('#brief-summary').textContent = 'From your local project data';
-  $('#ack-brief').textContent = state.readBriefings[brief] ? '✓ Read · Mark unread' : 'Mark as read ↗';
-  $('#ack-brief').setAttribute('aria-pressed', String(state.readBriefings[brief]));
+function renderBrief(){
+ const s=summary(state), morning=brief==='morning';
+ $('#brief-title').textContent=morning?'Start strong. Stay ahead.':'Close the day with clarity.';
+ $('#brief-intro').textContent=morning?'Here’s your field picture for Riverside Commons. A few things to keep on your radar:':`You’ve closed ${s.done} of ${s.total} tasks. Here’s what to carry into tomorrow’s huddle:`;
+ const points=[`${s.open} open tasks · ${followUps(state).length} open follow-ups. Closing a follow-up does not complete physical work.`,`${s.confirmed} confirmed commitments. ${state.commitments.filter(i=>i.status==='completed').length} explicitly completed.`,morning?`${s.risks} open risks. Review the watch list before the crew gets moving.`:`${state.events.filter(i=>i.status!=='completed').length} open events. Review dates and contractor readiness before the next shift.`];
+ $('#brief-points').innerHTML=points.map(p=>`<li>${escape(p)}</li>`).join('');$('#brief-summary').textContent='From your local project data';$('#ack-brief').textContent=state.readBriefings[brief]?'✓ Read · Mark unread':'Mark as read ↗';$('#ack-brief').setAttribute('aria-pressed',String(state.readBriefings[brief]));
 }
-$('#task-list').addEventListener('change', event=> { const t=state.tasks.find(t=>t.id===event.target.dataset.task); if(t){t.done=event.target.checked;save(t.done?'Task completed. One step forward.':'Task reopened.');} });
-$('#commitment-list').addEventListener('click',event=>{const button=event.target.closest('[data-commitment]');if(!button)return;const c=state.commitments.find(c=>c.id===button.dataset.commitment);c.confirmed=!c.confirmed;save(`${c.name} ${c.confirmed?'confirmed':'confirmation removed'}.`);$(`[data-commitment="${c.id}"]`).focus();});
-$('#risk-list').addEventListener('click',event=>{const button=event.target.closest('[data-risk]');if(!button)return;const r=state.risks.find(r=>r.id===button.dataset.risk);r.resolved=!r.resolved;save(r.resolved?'Risk resolved.':'Risk reopened.');$(`[data-risk="${r.id}"]`).focus();});
+// Shared item actions use only the selected collection and ID. No completion cascades.
+document.addEventListener('change',event=>{
+ const input=event.target.closest('[data-check]');if(!input)return;
+ setStatus(state,input.dataset.collection,input.dataset.check,input.checked?'completed':'pending');save(input.checked?'This item completed. Related physical work is unchanged.':'Item reopened.');
+ const replacement=document.getElementById(input.id);if(replacement)replacement.focus();
+});
+document.addEventListener('click',event=>{
+ const button=event.target.closest('button');if(!button)return;
+ if(button.dataset.edit){openItem(button.dataset.collection,button.dataset.edit);}
+ if(button.dataset.delete && confirm('Delete this item? The original field note and other items will remain.')){const key=button.dataset.collection;state[key]=state[key].filter(i=>i.id!==button.dataset.delete);save('Item deleted. Original field note retained.');}
+ if(button.dataset.add)openItem(button.dataset.add);
+ if(button.dataset.close)document.getElementById(button.dataset.close).close();
+ if(button.dataset.confirm){const item=state.commitments.find(i=>i.id===button.dataset.confirm);setStatus(state,'commitments',item.id,item.status==='confirmed'?'pending':'confirmed');save('Commitment updated. Work completion is unchanged.');}
+ if(button.dataset.risk){const risk=state.risks.find(r=>r.id===button.dataset.risk);risk.resolved=!risk.resolved;save(risk.resolved?'Risk resolved.':'Risk reopened.');}
+});
 document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>{b.classList.toggle('selected',b===button);b.setAttribute('aria-pressed',String(b===button));});render();}));
 document.querySelectorAll('[data-brief]').forEach(button=>button.addEventListener('click',()=>{brief=button.dataset.brief;document.querySelectorAll('[data-brief]').forEach(b=>{b.classList.toggle('selected',b===button);b.setAttribute('aria-pressed',String(b===button));});renderBrief();}));
 $('#ack-brief').addEventListener('click',()=>{state.readBriefings[brief]=!state.readBriefings[brief];save('Briefing updated.');});
-function openEntry(mode){entryMode=mode;$('#entry-form').reset();$('#dialog-title').textContent=mode==='task'?'Add a task':'Add field update';$('#entry-label').textContent=mode==='task'?'What needs to happen?':'What’s happening on site?';$('#task-options').hidden=mode!=='task';$('#entry-text').placeholder=mode==='task'?'e.g. Confirm tomorrow’s concrete delivery':'e.g. East corridor rough-in complete. Ready for inspection.';$('#entry-dialog').showModal();$('#entry-text').focus();}
-$('#add-task').addEventListener('click',()=>openEntry('task'));
+function openEntry(){$('#entry-form').reset();$('#dialog-title').textContent='Add field update';$('#entry-label').textContent='What’s happening on site?';$('#task-options').hidden=true;$('#entry-text').placeholder='Apex will deliver steel tomorrow at 10 AM; remind me to call Apex Thursday; schedule the rebar inspection next Monday at 9 AM.';$('#entry-submit').textContent='Analyze & review →';$('#entry-dialog').showModal();$('#entry-text').focus();}
+$('#add-task').addEventListener('click',()=>openItem('tasks'));
 $('#open-update').addEventListener('click',()=>openEntry('update'));
 $('#close-dialog').addEventListener('click',()=>$('#entry-dialog').close());
-$('#entry-form').addEventListener('submit',event=>{event.preventDefault();const text=$('#entry-text').value.trim();if(!text){$('#entry-text').setCustomValidity('Enter a task or update.');$('#entry-text').reportValidity();return;}const id=crypto.randomUUID?.() || `local-${Date.now()}`;if(entryMode==='task'){state.tasks.unshift({id,title:text,detail:'Added by you · Field task',time:'Today',priority:$('#entry-priority').value,done:false});filter='all';document.querySelectorAll('[data-filter]').forEach(b=>{b.classList.toggle('selected',b.dataset.filter==='all');b.setAttribute('aria-pressed',String(b.dataset.filter==='all'));});}else{state.activities.unshift({id,author:'James Mitchell',initials:'JM',text,time:new Date().toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})});}$('#entry-dialog').close();save(entryMode==='task'?'Task added to your checklist.':'Field update saved.');});
-$('#entry-text').addEventListener('input',()=>$('#entry-text').setCustomValidity(''));
-$('#reset-demo').addEventListener('click',()=>{if(!confirm('Reset all tasks, confirmations, briefings, risks, and field updates to the fictional demo? Your changes in this browser will be removed.'))return;state=initialState();save('Demo data reset.');});
+$('#entry-form').addEventListener('submit',event=>{event.preventDefault();originalNote=$('#entry-text').value;if(!originalNote.trim()){toast('Enter a field note first.');return;}referenceDate=new Date();proposals=analyzeNote(originalNote,referenceDate);$('#entry-dialog').close();$('#review-note').textContent=originalNote;$('#analysis-date').textContent=`Dates use your device’s local calendar: ${referenceDate.toLocaleString()}. A bare weekday includes today; “next” weekday means its next occurrence, at least one day away. Verify all dates.`;renderProposals();$('#review-dialog').showModal();});
+function blankItem(){return {id:uid(),title:'',detail:'',contractor:'',dueDate:'',dueTime:'',time:'',status:'pending',priority:'normal',kind:'work',sourceNoteId:''};}
+function options(values,current){return values.map(([value,label])=>`<option value="${value}" ${value===current?'selected':''}>${escape(label)}</option>`).join('');}
+function fields(item,withType=false){return `${withType?`<label>Item type<select name="collection">${options(Object.entries(names),item.collection)}</select></label>`:''}<label>Title<input name="title" required maxlength="1000" value="${escape(item.title)}"></label><div class="field-grid"><label>Contractor / trade<input name="contractor" maxlength="150" value="${escape(item.contractor)}"></label><label>Status<select name="status">${options(statuses.map(s=>[s,s[0].toUpperCase()+s.slice(1)]),item.status)}</select></label><label>Date<input name="dueDate" type="date" value="${escape(item.dueDate)}"></label><label>Time<input name="dueTime" type="time" value="${escape(item.dueTime)}"></label><label>Priority<select name="priority">${options([['normal','Normal'],['high','High']],item.priority)}</select></label><label>Work type<select name="kind" ${item.collection==='reminders'?'disabled':''}>${options([['work','Physical work'],['followup','Follow-up only']],item.kind)}</select></label></div><label>Details<input name="detail" maxlength="1000" value="${escape(item.detail)}"></label>`;}
+function readFields(container,item){const result={...item};for(const field of container.querySelectorAll('[name]'))result[field.name]=field.value.trim();if(result.collection==='reminders')result.kind='followup';if(result.dueDate!==item.dueDate || result.dueTime!==item.dueTime)result.time='';return result;}
+function renderProposals(){
+ $('#proposal-list').innerHTML=proposals.map((p,index)=>`<fieldset class="proposal" data-proposal="${index}"><legend><label class="include-label"><input type="checkbox" class="include-proposal" ${p.selected?'checked':''}> Include item ${index+1}</label></legend>${fields(p,true)}<p class="proposal-warning">${escape(p.warning || 'Review this suggested item before saving.')}${isDuplicate(state,p.collection,p)?' Duplicate already in workspace; it will be skipped.':''}</p></fieldset>`).join('') || '<p class="empty-state">No actionable items found. Save just the original note, or add a missed item.</p>';
+ document.querySelectorAll('[data-proposal]').forEach(box=>{if(!box.querySelector('.include-proposal').checked)box.querySelectorAll('[name]').forEach(field=>field.disabled=true);});
+}
+function collectProposals(){return [...document.querySelectorAll('[data-proposal]')].map(box=>({...readFields(box,proposals[Number(box.dataset.proposal)]),selected:box.querySelector('.include-proposal').checked}));}
+$('#proposal-list').addEventListener('change',event=>{const box=event.target.closest('[data-proposal]');if(!box)return;if(event.target.classList.contains('include-proposal'))box.querySelectorAll('[name]').forEach(field=>field.disabled=!event.target.checked);const kind=box.querySelector('[name=kind]');if(box.querySelector('[name=collection]').value==='reminders'){kind.value='followup';kind.disabled=true;}else if(box.querySelector('.include-proposal').checked)kind.disabled=false;});
+$('#add-proposal').addEventListener('click',()=>{proposals=collectProposals();proposals.push({...blankItem(),collection:'tasks',selected:true,warning:'Added manually. Review before saving.'});renderProposals();});
+$('#back-to-note').addEventListener('click',()=>{$('#review-dialog').close();$('#entry-dialog').showModal();});
+$('#review-form').addEventListener('submit',event=>{
+ event.preventDefault();const noteId=uid();let added=0,duplicates=0;
+ const selected=collectProposals().filter(p=>p.selected);
+ // Build on a copy so validation never leaves a partially saved note.
+ const next=structuredClone(state);
+ try{for(const candidate of selected){const {collection,warning,selected,...item}=candidate;item.sourceNoteId=noteId;if(addItem(next,collection,item))added++;else duplicates++;}}
+ catch(error){toast(error.message);return;}
+ next.activities.unshift({id:noteId,author:'James Mitchell',initials:'JM',text:originalNote,time:referenceDate.toLocaleString(),referenceDate:localDate(referenceDate)});
+ state=next;$('#review-dialog').close();save(`Original note saved. ${added} items added${duplicates?`; ${duplicates} duplicates skipped`:''}.`);
+});
+function openItem(collection,id){const item=id?state[collection].find(i=>i.id===id):blankItem();editing={collection,id,item};$('#item-dialog-title').textContent=`${id?'Edit':'Add'} ${names[collection].toLowerCase()}`;$('#item-fields').innerHTML=fields({...item,collection,kind:collection==='reminders'?'followup':item.kind});$('#item-dialog').showModal();}
+$('#item-form').addEventListener('submit',event=>{event.preventDefault();const {collection,id,item}=editing;const updated=readFields($('#item-fields'),{...item,collection});if(collection==='reminders')updated.kind='followup';if(isDuplicate(state,collection,updated,id)){toast('This item already exists with the same title, date, and time.');return;}try{if(id){const index=state[collection].findIndex(i=>i.id===id);const copy=structuredClone(state);copy[collection].splice(index,1);addItem(copy,collection,updated);state=copy;}else addItem(state,collection,updated);}catch(error){toast(error.message);return;}$('#item-dialog').close();save('Item saved. Related items are unchanged.');});
+$('#reset-demo').addEventListener('click',()=>{if(!confirm('Reset all local items and field notes to the fictional demo?'))return;state=initialState();save('Demo data reset.');});
 document.querySelectorAll('[data-filter],[data-brief]').forEach(b=>b.setAttribute('aria-pressed',String(b.classList.contains('selected'))));
-render();
-if(recovery)toast('Saved data was incompatible. A fresh demo has been loaded.');
+render();if(recovery)toast('Saved data could not be read. The original stored value stays untouched until you save a change.');

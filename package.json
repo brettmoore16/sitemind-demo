@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "test:browser": "node scripts/browser-check.cjs"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }

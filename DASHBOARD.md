@@ -38,19 +38,35 @@ The HTML uses relative asset paths, so repository Pages URLs and subfolder uploa
 
 `localhost` on the iPhone refers to the phone, not your computer. A cloud environment’s private address generally cannot be reached over your home Wi-Fi; run the repository on your computer for these steps. For a quick desktop approximation, use your browser’s responsive device mode at 390 × 844. Physical iPhone Safari testing remains recommended.
 
-## Try the dashboard
+## Field notes → reviewed items
 
-- Check or reopen tasks; filter by all, to do, or completed; add tasks with normal or high priority.
-- Confirm or unconfirm contractor commitments.
-- Resolve and reopen watch-list risks.
-- Add field updates to the activity feed.
-- Switch morning/evening briefings. They summarize the current local checklist, commitments, and risks using templates; mark either briefing read or unread.
-- Review the fictional upcoming schedule. Schedule events are read-only.
-- Use **Reset demo data** at the bottom to restore the original fictional project after confirmation.
+Tap **Add field update**, enter a fictional note, then **Analyze & review**. Nothing is saved at this stage. The review displays the original note exactly as entered. Each proposed item can be unchecked or edited: type, title, contractor, status, date, time, priority, details, and whether it is physical work or a follow-up. You can add a missed item, return to the note, or cancel. **Confirm & save note** saves the original note and only the selected items. You can save just the note by unchecking all proposals. Expand **Original field note** on any derived item to see its source; editing or deleting an item never rewrites that note.
 
-The demo uses a fixed project day (October 26, 2026). Site conditions, people, schedule, and weather are fictional, not live. New updates show the device’s actual local time.
+Try this fictional example:
 
-Changes are stored under `sitemind-dashboard-v1` in browser localStorage. They persist after a reload on the same browser and origin; they do not sync between devices or ports. Private browsing or clearing site data may remove them. If storage is blocked or full, the dashboard continues for the current session and displays a session-only message. Do not enter sensitive project data. There is no login, backend, SMS integration, or server-side storage.
+> Apex will deliver steel tomorrow at 10 AM; remind me to call Apex Thursday; review RFI #42 next Monday; schedule the rebar inspection Thursday at 9 AM.
+
+This proposes a contractor commitment, its delivery schedule event, a reminder, an RFI follow-up task, and an inspection event. A dated promise can create both a commitment and an event; they have independent statuses. The rules recognize trade names and common terms such as rough-in, MEP, HVAC, formwork, rebar, punch lists, RFIs, submittals, deliveries, inspections, and pours. Separate actions with sentences, newlines, semicolons, or commas / “and” before a new action. Material lists such as “formwork and rebar” stay together.
+
+Processing is deterministic JavaScript on the device, with no AI service or network calls. It cannot understand arbitrary language reliably. Unclear observations produce unchecked suggestions; cancellations and reported completion produce warnings and pending items. Review every proposal. No message automatically confirms a promise or verifies completion.
+
+### Dates and reminders
+
+Relative dates use the device’s local calendar **at analysis time**, shown in the review and saved with the note. Supported forms include today, tonight, tomorrow, day after tomorrow, Thursday (or any full weekday), next Monday, in 3 days, and YYYY-MM-DD. A bare weekday includes today; “next” means the next occurrence at least one day away. Times support AM/PM, `at 14:30`, noon, and midnight. Ambiguous dates and approximate times are left for review, rather than guessed. Missing dates remain blank. Reminders are visible in-app; they do not send push notifications, SMS, or background alarms.
+
+### Status and item controls
+
+All tasks, commitments, events, and reminders have **Pending**, **Scheduled**, **Confirmed**, or **Completed** status. Scheduled means planned; confirmed means acknowledged, not finished. Only explicitly checking that specific item or selecting Completed changes its completion status. Completing “call Apex” never completes Apex’s steel delivery, even when both came from the same note. Reopening an item returns it to pending. You can use **Edit** to set any status, date, or priority. All four item types support Add, Edit, and Delete; deletion asks for confirmation.
+
+**Top 3 Priorities** ranks unfinished items by high priority first, then earliest date and time. **Open Follow-Ups** combines follow-up tasks and incomplete reminders. These are views of the same items, so checklist changes and counts stay aligned. Completed follow-ups remain available in the main task checklist or Reminders card for editing/reopening. Task filters, contractor confirmations, risk resolution, briefings, and demo reset remain available.
+
+Duplicates in each item type are rejected by normalized title, date, and time (case, punctuation, extra whitespace, and polite filler are ignored). This check covers manual entries, edits, existing completed items, repeated clauses, and the current confirmation batch. Different dates or times remain distinct; this is not semantic similarity detection. Skipped duplicates are reported and the original note is still retained.
+
+### Browser storage
+
+All example people, conditions, and project data are fictional. Seed schedule dates use the device date when the demo is first loaded or reset. New updates use the device’s actual local time. This is not live weather, a real project feed, or verified construction progress.
+
+Changes stay under `sitemind-dashboard-v1` in localStorage, now with schema version 2. Existing tasks, contractor confirmations, risks, briefings, and original notes migrate on load; no reset is required. Deletions survive reloads. Storage is per browser and origin, and does not sync across devices or ports. Clearing site data removes it. Blocked/full storage falls back to session-only operation with a visible notice. Do not enter sensitive project data. There is no login, backend, external API, or SMS integration.
 
 ## Validation
 
@@ -58,14 +74,29 @@ Changes are stored under `sitemind-dashboard-v1` in browser localStorage. They p
 npm test
 ```
 
-Three Node tests check live summary calculations, persisted-data validation, and reset isolation. Browser validation also covered task filters/additions, contractor and risk toggles, field updates, both briefings, reload persistence, reset, malformed/blocked storage, user-input escaping, and layout widths of 320, 375, 390, 768, 1024, and 1440 pixels. No external requests were made. Mobile checks used Chromium emulation, not a physical iPhone.
+13 Node tests cover extraction, relative-date boundaries, common construction terms, negative/completed wording, multi-item notes, duplicates, schema migration, independent completion, priorities, and validation.
+
+The repeatable browser suite is optional and uses free Playwright (no production dependency). With the server running in a separate terminal:
+
+```sh
+# Optional test tooling only; no paid dependencies or accounts.
+npm install --no-save --package-lock=false playwright
+npx playwright install chromium
+PORT=3001 npm start
+# In another terminal:
+npm run test:browser
+```
+
+Use BASE_URL to select another local server. PLAYWRIGHT_MODULE and CHROMIUM_PATH can select preinstalled test tooling. Browser checks cover staged review/cancel/confirm, original note retention, relative dates, all item types, edit/delete, duplicate rejection, explicit statuses, follow-up isolation, counts, priorities, persistence/migration, note-only saves, excluded proposals, blocked storage, escaped input, and six viewport widths (320–1440px). Application requests stay local. Mobile validation uses Chromium emulation; physical iPhone Safari testing remains recommended.
 
 ## Files
 
 - `index.html`: accessible landmarks, cards, navigation, and entry dialog.
 - `src/styles.css`: responsive layout, touch controls, safe-area navigation, and reduced-motion support.
-- `src/state.js`: fictional seed data, validation, and derived totals.
-- `src/app.js`: rendering, interactions, local persistence, and briefing templates.
+- `src/state.js`: fictional seed data, schema migration, statuses, duplicate checks, priorities, and derived totals.
+- `src/app.js`: rendering, staged review, item management, local persistence, and briefing templates.
+- `src/parser.js`: free rule-based construction/date extraction.
+- `scripts/browser-check.cjs`: optional browser regression suite.
 - `server.mjs`: dependency-free static server; serves HTML/CSS/JS/SVG only.
 
 Each cloud task already has an isolated checkout. Use the existing checkout; a Git worktree is unnecessary unless explicitly requested.
