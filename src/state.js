@@ -40,6 +40,7 @@ export function initialState() { return migrateState(legacySeed()); }
 export function migrateState(value) {
   if (!value || !Array.isArray(value.tasks) || !Array.isArray(value.commitments) || !Array.isArray(value.risks) || !Array.isArray(value.activities)) throw new Error('Invalid saved workspace');
   if (value.schemaVersion === 2) {
+    if(!value.journal)value = {...value,journal:[]};
     if (!validState(value)) throw new Error('Invalid saved workspace');
     return value;
   }
@@ -62,7 +63,7 @@ export function migrateState(value) {
       ['Owner walkthrough','Main entrance · Project team',localDate(),'14:00'],
       ['Concrete pour · Zone B','Pending weather check',localDate(tomorrow),'07:00']
     ].map(([title,detail,dueDate,dueTime],i)=>({id:`e${i}`,title,detail,dueDate,dueTime,status:'scheduled',priority:'normal',contractor:'',kind:'work',sourceNoteId:'',time:''})),
-    reminders:[], risks:value.risks, activities:value.activities,
+    reminders:[], journal:[], risks:value.risks, activities:value.activities,
     readBriefings:value.readBriefings || {morning:false,evening:false}
   };
   if (!validState(result)) throw new Error('Invalid saved workspace');
@@ -77,7 +78,7 @@ export function validItem(item) {
   return item && ['id','title','detail','contractor','kind','dueDate','dueTime','sourceNoteId','time'].every(k=>typeof item[k]==='string') && item.title.trim().length > 0 && statuses.includes(item.status) && ['normal','high'].includes(item.priority) && ['work','followup'].includes(item.kind) && (!item.dueDate || validDate(item.dueDate)) && (!item.dueTime || /^([01]\d|2[0-3]):[0-5]\d$/.test(item.dueTime));
 }
 export function validState(value) {
-  return !!(value && value.schemaVersion === 2 && collections.every(key => Array.isArray(value[key]) && value[key].every(validItem) && new Set(value[key].map(i=>i.id)).size === value[key].length) && Array.isArray(value.risks) && value.risks.every(r=>['id','title','text','level'].every(k=>typeof r[k]==='string') && typeof r.resolved === 'boolean') && Array.isArray(value.activities) && value.activities.every(a=>['id','author','initials','text','time'].every(k=>typeof a[k]==='string')) && value.readBriefings && ['morning','evening'].every(k=>typeof value.readBriefings[k]==='boolean'));
+  return !!(value && value.schemaVersion === 2 && (!value.journal || (Array.isArray(value.journal) && value.journal.every(validItem))) && collections.every(key => Array.isArray(value[key]) && value[key].every(validItem) && new Set(value[key].map(i=>i.id)).size === value[key].length) && Array.isArray(value.risks) && value.risks.every(r=>['id','title','text','level'].every(k=>typeof r[k]==='string') && typeof r.resolved === 'boolean') && Array.isArray(value.activities) && value.activities.every(a=>['id','author','initials','text','time'].every(k=>typeof a[k]==='string')) && value.readBriefings && ['morning','evening'].every(k=>typeof value.readBriefings[k]==='boolean'));
 }
 export function summary(state) {
   return {total:state.tasks.length, done:state.tasks.filter(t=>t.status==='completed').length, open:state.tasks.filter(t=>t.status!=='completed').length, confirmed:state.commitments.filter(c=>c.status==='confirmed').length, risks:state.risks.filter(r=>!r.resolved).length, highRisks:state.risks.filter(r=>!r.resolved && r.level==='HIGH').length};
@@ -107,3 +108,5 @@ export function setStatus(state, collection, id, status) {
   const item=state[collection]?.find(i=>i.id===id);
   if (item) item.status=status; // Intentionally never cascades to linked physical work.
 }
+
+export function emptyWorkspace() {return {schemaVersion:2,tasks:[],commitments:[],events:[],reminders:[],risks:[],journal:[],activities:[],readBriefings:{morning:false,evening:false}};}

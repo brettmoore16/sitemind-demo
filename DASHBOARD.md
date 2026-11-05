@@ -100,3 +100,8 @@ Use BASE_URL to select another local server. PLAYWRIGHT_MODULE and CHROMIUM_PATH
 - `server.mjs`: dependency-free static server; serves HTML/CSS/JS/SVG only.
 
 Each cloud task already has an isolated checkout. Use the existing checkout; a Git worktree is unnecessary unless explicitly requested.
+
+
+## SaaS foundation
+
+The dashboard now includes compact Today/Tasks/Commitments/Schedule/Risks/Journal navigation, a backup export, delivery preference controls, and reviewable create/correct proposals. Local demo rules remain free. Private server mode and optional AI require a separately configured authenticated server; GitHub Pages never receives credentials or cloud project data. See [phase 1](docs/PHASE_1.md) for exact accounts, keys, acceptance tests and deferred production work. SMS and billing remain disabled.

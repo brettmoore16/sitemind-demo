@@ -13,7 +13,7 @@ const base=process.env.BASE_URL || 'http://127.0.0.1:3001';
  async function analyze(text){await page.locator('#open-update').click();await page.locator('#entry-text').fill(text);await page.locator('#entry-submit').click();await page.locator('#review-dialog').waitFor({state:'visible'});}
  await analyze(original);
  assert.equal(await page.locator('.proposal').count(),5);
- for(const width of [320,390]){await page.setViewportSize({width,height:844});assert.ok(await page.locator('#review-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),`review overflow ${width}`);}
+ for(const width of [320,390]){await page.setViewportSize({width,height:844});await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth,{},{timeout:2000}).catch(()=>{});assert.ok(await page.locator('#review-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth),`review overflow ${width}`);}
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.locator('#review-note').textContent(),original);
  assert.equal(await page.locator('#task-list .task-row').count(),6);
@@ -88,7 +88,7 @@ const base=process.env.BASE_URL || 'http://127.0.0.1:3001';
  await page.reload();assert.match(await page.locator('#activity-list').textContent(),/General observation/);
  await page.locator('[data-filter=done]').click();assert.equal(await page.locator('#task-list .task-row').count(),1);
  await page.locator('[data-filter=all]').click();
- for(const width of [320,375,390,768,1024,1440]){await page.setViewportSize({width,height:844});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`overflow ${width}`);}
+ for(const width of [320,375,390,768,1024,1440]){await page.setViewportSize({width,height:844});await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth,{},{timeout:2000}).catch(()=>{});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`overflow ${width} actual ${await page.evaluate(()=>[innerWidth,document.documentElement.scrollWidth,document.body.scrollWidth,scrollX])}: ${JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('body *')].filter(e=>e.scrollWidth>e.clientWidth+2).slice(0,12).map(e=>({tag:e.tagName,id:e.id,cls:e.className,right:e.getBoundingClientRect().right}))))}`);}
  await page.setViewportSize({width:390,height:844});
  await page.setViewportSize({width:1440,height:1050});
  // Migration through the real browser loader.
