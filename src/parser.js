@@ -57,7 +57,9 @@ export function analyzeNote(text, reference = new Date()) {
     const negative=/\b(can(?:not|'t)|won't|will not|not confirmed|cancelled|canceled|delayed|no longer)\b/i.test(title);
     const base={id:uid(),title,detail:'Proposed from a field note',contractor,priority:/\b(urgent|asap|critical|safety|high priority|blocker)\b/i.test(title)?'high':'normal',kind:followup?'followup':'work',dueDate:when.dueDate,dueTime:when.dueTime,time:'',sourceNoteId:'',status:'pending',warning:[when.warning,/\b(done|complete[ds]?|finished)\b/i.test(title)?'Reported completion is not verified. Status stays pending for your review.':'',negative?'Possible cancellation, delay, or uncertainty. Verify before saving.':''].filter(Boolean).join(' '),selected:true};
     const add=(collection,extra={})=>proposals.push({...base,id:uid(),collection,...extra});
-    if(reminder) add('reminders',{kind:'followup'});
+    if(/\b(risk|blocker|hazard|unsafe|safety concern)\b/i.test(title)) add('risks');
+    else if(/^(journal|observation|site note)\s*:/i.test(title)) add('journal',{kind:'followup'});
+    else if(reminder) add('reminders',{kind:'followup'});
     else if(followup) add('tasks',{kind:'followup'});
     else if(promise && !negative) {add('commitments');if(event)add('events',{status:when.dueDate?'scheduled':'pending'});}
     else if(event && !negative) add('events',{status:when.dueDate?'scheduled':'pending'});

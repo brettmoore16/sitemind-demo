@@ -1,0 +1,50 @@
+// Optional free test tooling only; never connects to Supabase or the Internet.
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {emptyWorkspace} from '../src/state.js';
+const {PGlite}=await import(process.env.PGLITE_MODULE || '@electric-sql/pglite');
+const db=new PGlite();
+try{
+ await db.exec(`create role anon;create role authenticated;create role service_role bypassrls;create schema auth;create table auth.users(id uuid primary key);create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;grant usage on schema auth to authenticated,anon,service_role;grant execute on function auth.uid() to authenticated,anon,service_role;`);
+ await db.exec(await readFile(new URL('../supabase/migrations/001_foundation.sql',import.meta.url),'utf8'));
+ const a='11111111-1111-4111-8111-111111111111',b='22222222-2222-4222-8222-222222222222',viewer='33333333-3333-4333-8333-333333333333';
+ await db.query('insert into auth.users values($1),($2),($3)',[a,b,viewer]);
+ async function as(user){await db.exec('reset role;set role authenticated');await db.query("select set_config('request.jwt.claim.sub',$1,false)",[user]);}
+ await as(a);const pa=(await db.query("select public.bootstrap_workspace('Fictional A') as id")).rows[0].id;
+ const tenant=(await db.query('select tenant_id from public.projects where id=$1',[pa])).rows[0].tenant_id;
+ const state=emptyWorkspace();state.tasks=[{id:'task',title:'Fictional task',detail:'',contractor:'',kind:'work',status:'pending',dueDate:'',dueTime:'',priority:'normal',sourceNoteId:'note',time:''}];state.activities=[{id:'note',author:'Demo',initials:'D',text:'Original fictional note',time:'Today'}];
+ await db.query('select public.apply_workspace($1,0,$2::jsonb)',[pa,JSON.stringify(state)]);
+ await assert.rejects(db.query('select public.apply_workspace($1,0,$2::jsonb)',[pa,JSON.stringify(state)]),/Revision conflict/);
+ const changed=structuredClone(state);changed.activities[0].text='Rewritten';await assert.rejects(db.query('select public.apply_workspace($1,1,$2::jsonb)',[pa,JSON.stringify(changed)]),/immutable/);
+ await as(b);const pb=(await db.query("select public.bootstrap_workspace('Fictional B') as id")).rows[0].id;
+ assert.notEqual(pa,pb);assert.equal((await db.query('select public.get_workspace($1) as data',[pa])).rows[0].data,null);
+ assert.equal((await db.query('select * from public.work_items where project_id=$1',[pa])).rows.length,0);
+ assert.equal((await db.query('select * from public.field_updates where project_id=$1',[pa])).rows.length,0);
+ assert.equal((await db.query('select * from public.tenants')).rows.length,1);
+ await assert.rejects(db.query('select public.apply_workspace($1,1,$2::jsonb)',[pa,JSON.stringify(state)]),/insufficient_privilege|permission denied/i);
+ await assert.rejects(db.query("insert into public.memberships values($1,$2,'owner')",[tenant,b]),/permission denied/i);
+ await assert.rejects(db.query('select public.record_sms_webhook($1,$2,$3,$4)',['SM_fictional','+15555550100','stop','STOP']),/permission denied/i);
+ await db.exec('reset role');await db.query("insert into public.memberships values($1,$2,'viewer')",[tenant,viewer]);
+ await as(viewer);assert.ok((await db.query('select public.get_workspace($1) as data',[pa])).rows[0].data);
+ await assert.rejects(db.query('select public.apply_workspace($1,1,$2::jsonb)',[pa,JSON.stringify(state)]),/insufficient_privilege|permission denied/i);
+ await assert.rejects(db.query("insert into public.delivery_preferences(project_id,user_id) values($1,$2)",[pa,a]),/row-level security/i);
+ await db.exec('reset role');await db.query("insert into public.verified_phones(user_id,phone,verified_at) values($1,'+15555550100',now())",[a]);
+ await db.exec('set role service_role');
+ for(const command of ['stop','start'])await db.query('select public.record_sms_webhook($1,$2,$3,$4)',['SM_fictional','+15555550100',command,command]);
+ assert.equal((await db.query("select provider_opt_out from public.verified_phones where phone='+15555550100'")).rows[0].provider_opt_out,true);
+ assert.equal((await db.query('select * from public.message_log')).rows.length,1);
+ await db.query('select public.record_sms_webhook($1,$2,$3,$4)',['SM_other','+15555550100','start','START']);
+ assert.equal((await db.query("select provider_opt_out from public.verified_phones where phone='+15555550100'")).rows[0].provider_opt_out,false);
+ const subscription={id:'sub_fictional',customer:'cus_fictional',status:'trialing',metadata:{tenant_id:tenant},trial_start:1793491200,trial_end:1794700800};
+ const event={id:'evt_fictional',type:'customer.subscription.created',created:100,sitemind_subscription:subscription};
+ await db.query('select public.record_stripe_event($1::jsonb)',[JSON.stringify(event)]);
+ await db.query('select public.record_stripe_event($1::jsonb)',[JSON.stringify({...event,sitemind_subscription:{...subscription,status:'canceled'}})]);
+ assert.equal((await db.query('select status from public.billing_accounts')).rows[0].status,'trialing');
+ await db.query('select public.record_stripe_event($1::jsonb)',[JSON.stringify({...event,id:'evt_newer',created:200,sitemind_subscription:{...subscription,status:'canceled'}})]);
+ await db.query('select public.record_stripe_event($1::jsonb)',[JSON.stringify({...event,id:'evt_older',created:150,sitemind_subscription:{...subscription,status:'active'}})]);
+ assert.equal((await db.query('select status from public.billing_accounts')).rows[0].status,'canceled');
+ await as(viewer);assert.equal((await db.query('select * from public.billing_accounts')).rows.length,0);
+ await as(a);assert.equal((await db.query('select * from public.billing_accounts')).rows.length,1);
+ await db.exec('reset role;set role anon');assert.equal((await db.query("select has_table_privilege('anon','public.work_items','SELECT') as allowed")).rows[0].allowed,false);
+ console.log('PASS SQL: migration, two-tenant isolation, viewer read-only access, no role escalation, immutable notes, stale revisions, protected preferences/system functions, duplicate-safe STOP/START, idempotent/out-of-order billing state, owner-only billing, no anonymous data access.');
+}finally{await db.close();}
